@@ -1,0 +1,13 @@
+{
+  "name": "Street Tag",
+  "short_name": "StreetTag",
+  "description": "GPS tag. Get close. Hit the button. Run. First to 10 tags wins.",
+  "display": "standalone",
+  "orientation": "portrait",
+  "start_url": ".",
+  "background_color": "#131A22",
+  "theme_color": "#131A22",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

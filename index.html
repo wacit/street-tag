@@ -4,6 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>STREET TAG</title>
+<meta name="theme-color" content="#131A22">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="StreetTag">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
   :root{
@@ -19,7 +27,7 @@
     --mono:ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   }
   *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-  html,body{height:100%;overscroll-behavior:none}
+  html,body{height:100%;height:100dvh;overscroll-behavior:none;-webkit-text-size-adjust:100%}
   body{
     font-family:var(--display);
     background:var(--asphalt);
@@ -27,8 +35,26 @@
     overflow:hidden;
     position:fixed;inset:0;
     user-select:none;-webkit-user-select:none;
+    touch-action:manipulation; /* kills 300ms delay + double-tap zoom on buttons */
   }
+  button{touch-action:manipulation;min-height:44px} /* Apple HIG minimum touch target */
   .hidden{display:none !important}
+
+  /* Desktop = letterboxed phone frame. This app is phone-first by design. */
+  @media (min-width:700px){
+    body{background:#0B0F15}
+    #join,#game,#sheet,#winOverlay{
+      left:max(0px, calc(50vw - 240px));
+      right:max(0px, calc(50vw - 240px));
+    }
+    #game,#join{border-left:2px solid #232D3A;border-right:2px solid #232D3A}
+    body::after{
+      content:"BUILT FOR PHONES — open this URL on your mobile browser";
+      position:fixed;left:24px;bottom:24px;z-index:5000;max-width:170px;
+      font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+      color:#3C4A5A;line-height:1.7;pointer-events:none;
+    }
+  }
 
   /* ============ TYPE ============ */
   .disp{
@@ -390,8 +416,21 @@ $("#startBtn").onclick = async () => {
   initMap();
   if (S.mode === "gps") startGPS(); else startSim();
   S.running = true;
+  keepAwake();
   loop();
 };
+
+/* Screen wake lock — a tag game is useless if the phone sleeps mid-chase */
+async function keepAwake(){
+  try{
+    if ("wakeLock" in navigator){
+      S.wake = await navigator.wakeLock.request("screen");
+    }
+  }catch(e){}
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && S.running) keepAwake();
+});
 
 /* ================= MAP ================= */
 function initMap(){
