@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>STREET TAG</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root{
+    --asphalt:#131A22;
+    --asphalt-2:#1B2430;
+    --line:#F2F5F7;
+    --hivis:#D8F224;
+    --safety:#FF5C1F;
+    --steel:#5E7285;
+    --immune:#3FE0D0;
+    --radius-lg:18px;
+    --display:'Helvetica Neue', Helvetica, Arial, system-ui, sans-serif;
+    --mono:ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;overscroll-behavior:none}
+  body{
+    font-family:var(--display);
+    background:var(--asphalt);
+    color:var(--line);
+    overflow:hidden;
+    position:fixed;inset:0;
+    user-select:none;-webkit-user-select:none;
+  }
+  .hidden{display:none !important}
+
+  /* ============ TYPE ============ */
+  .disp{
+    font-weight:900;font-style:italic;text-transform:uppercase;
+    letter-spacing:-0.02em;line-height:.9;
+  }
+  .util{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--steel)}
+
+  /* ============ JOIN SCREEN ============ */
+  #join{
+    position:fixed;inset:0;z-index:3000;
+    background:
+      repeating-linear-gradient(0deg, transparent 0 59px, rgba(242,245,247,.045) 59px 60px),
+      repeating-linear-gradient(90deg, transparent 0 59px, rgba(242,245,247,.045) 59px 60px),
+      var(--asphalt);
+    display:flex;flex-direction:column;
+    padding:max(20px, env(safe-area-inset-top)) 22px max(20px, env(safe-area-inset-bottom));
+    overflow-y:auto;
+  }
+  #join h1{
+    font-size:clamp(56px,17vw,96px);
+    margin-top:18px;
+    color:var(--line);
+  }
+  #join h1 em{font-style:italic;color:var(--hivis);display:block}
+  .tagline{margin-top:10px;margin-bottom:26px}
+  .field{margin-bottom:18px}
+  .field label{display:block;margin-bottom:7px}
+  input[type=text]{
+    width:100%;padding:15px 14px;
+    background:var(--asphalt-2);
+    border:2px solid #2A3644;border-radius:12px;
+    color:var(--line);font-size:17px;font-family:var(--display);font-weight:700;
+    text-transform:uppercase;letter-spacing:.04em;outline:none;
+  }
+  input[type=text]:focus{border-color:var(--hivis)}
+  .avatars{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
+  .avatars button{
+    aspect-ratio:1;font-size:26px;border-radius:12px;
+    background:var(--asphalt-2);border:2px solid #2A3644;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .avatars button.sel{border-color:var(--hivis);background:#232D14;transform:scale(1.06)}
+  .mode-row{display:flex;gap:10px}
+  .mode-row button{
+    flex:1;padding:13px 6px;border-radius:12px;border:2px solid #2A3644;
+    background:var(--asphalt-2);color:var(--line);
+    font-family:var(--display);font-weight:900;font-style:italic;text-transform:uppercase;font-size:14px;
+    cursor:pointer;letter-spacing:.02em;
+  }
+  .mode-row button.sel{border-color:var(--hivis);color:var(--hivis)}
+  #startBtn{
+    margin-top:8px;width:100%;padding:19px;border:none;border-radius:14px;
+    background:var(--hivis);color:#141900;
+    font-family:var(--display);font-weight:900;font-style:italic;font-size:22px;
+    text-transform:uppercase;letter-spacing:.01em;cursor:pointer;
+    box-shadow:0 6px 0 #8FA20F;
+  }
+  #startBtn:active{transform:translateY(3px);box-shadow:0 3px 0 #8FA20F}
+  .finePrint{margin-top:14px;font-family:var(--mono);font-size:10px;line-height:1.55;color:var(--steel);text-transform:none;letter-spacing:.02em}
+
+  /* ============ GAME ============ */
+  #game{position:fixed;inset:0}
+  #map{position:absolute;inset:0;background:
+      repeating-linear-gradient(0deg, transparent 0 49px, rgba(242,245,247,.05) 49px 50px),
+      repeating-linear-gradient(90deg, transparent 0 49px, rgba(242,245,247,.05) 49px 50px),
+      var(--asphalt-2);
+  }
+  .leaflet-container{background:transparent;font-family:var(--display)}
+  .leaflet-control-attribution{background:rgba(19,26,34,.7)!important;color:var(--steel)!important;font-size:9px!important}
+  .leaflet-control-attribution a{color:var(--steel)!important}
+
+  /* HUD top: scoreboard */
+  #hud{
+    position:absolute;top:0;left:0;right:0;z-index:1000;
+    padding:calc(env(safe-area-inset-top) + 10px) 12px 10px;
+    background:linear-gradient(180deg, rgba(19,26,34,.92) 0%, rgba(19,26,34,.75) 70%, transparent 100%);
+    pointer-events:none;
+  }
+  #hudTop{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  #roomLabel{pointer-events:auto}
+  #settingsBtn{
+    pointer-events:auto;background:var(--asphalt-2);border:2px solid #2A3644;color:var(--line);
+    border-radius:10px;padding:7px 12px;font-family:var(--mono);font-size:11px;
+    text-transform:uppercase;letter-spacing:.08em;cursor:pointer;
+  }
+  #scores{display:flex;gap:8px;overflow-x:auto;pointer-events:auto;scrollbar-width:none;padding-bottom:2px}
+  #scores::-webkit-scrollbar{display:none}
+  .scoreChip{
+    flex:0 0 auto;display:flex;align-items:center;gap:7px;
+    background:rgba(27,36,48,.92);border:2px solid #2A3644;border-radius:999px;
+    padding:5px 12px 5px 7px;
+  }
+  .scoreChip.me{border-color:var(--hivis)}
+  .scoreChip.immune{border-color:var(--immune)}
+  .scoreChip .em{font-size:19px;font-style:normal}
+  .scoreChip .nm{font-weight:900;font-style:italic;text-transform:uppercase;font-size:12px;max-width:74px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .scoreChip .sc{font-family:var(--mono);font-size:13px;color:var(--hivis);font-weight:700}
+  .scoreChip .sc small{color:var(--steel);font-size:9px}
+
+  /* Bottom: range readout + TAG button */
+  #bottom{
+    position:absolute;left:0;right:0;bottom:0;z-index:1000;
+    padding:12px 16px calc(env(safe-area-inset-bottom) + 16px);
+    background:linear-gradient(0deg, rgba(19,26,34,.95) 0%, rgba(19,26,34,.7) 65%, transparent 100%);
+    display:flex;flex-direction:column;gap:9px;align-items:center;
+  }
+  #nearest{font-family:var(--mono);font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--steel);text-align:center}
+  #nearest b{color:var(--line)}
+  #nearest.hot b{color:var(--safety)}
+  #tagBtn{
+    width:100%;max-width:420px;padding:22px;border:none;border-radius:var(--radius-lg);
+    font-family:var(--display);font-weight:900;font-style:italic;font-size:30px;
+    text-transform:uppercase;letter-spacing:.01em;
+    background:#242F3C;color:#49586A;
+    transition:background .15s,color .15s,transform .05s;
+  }
+  #tagBtn.armed{
+    background:var(--safety);color:#2A0E00;cursor:pointer;
+    box-shadow:0 0 0 4px rgba(255,92,31,.25), 0 6px 0 #B23A0C;
+    animation:armPulse 1s infinite;
+  }
+  #tagBtn.armed:active{transform:translateY(3px);box-shadow:0 0 0 4px rgba(255,92,31,.25),0 3px 0 #B23A0C}
+  @keyframes armPulse{
+    0%,100%{box-shadow:0 0 0 4px rgba(255,92,31,.25), 0 6px 0 #B23A0C}
+    50%{box-shadow:0 0 0 12px rgba(255,92,31,.08), 0 6px 0 #B23A0C}
+  }
+  #recenterBtn{
+    position:absolute;right:14px;bottom:calc(env(safe-area-inset-bottom) + 128px);z-index:1001;
+    width:46px;height:46px;border-radius:50%;border:2px solid #2A3644;
+    background:rgba(27,36,48,.95);color:var(--line);font-size:19px;cursor:pointer;
+  }
+
+  /* Markers */
+  .pMark{display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 2px 3px rgba(0,0,0,.6))}
+  .pMark .bubble{
+    width:42px;height:42px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;font-size:23px;
+    background:var(--asphalt-2);border:3px solid var(--safety);
+  }
+  .pMark.me .bubble{border-color:var(--hivis)}
+  .pMark.immune .bubble{border-color:var(--immune);animation:blink .5s infinite alternate}
+  @keyframes blink{from{opacity:1}to{opacity:.45}}
+  .pMark .tag{
+    margin-top:2px;background:rgba(19,26,34,.9);border-radius:6px;padding:1px 6px;
+    font-weight:900;font-style:italic;text-transform:uppercase;font-size:10px;color:var(--line);white-space:nowrap;
+  }
+  .ringIcon{border:2.5px dashed var(--hivis);border-radius:50%;opacity:.65;animation:ringSpin 9s linear infinite}
+  @keyframes ringSpin{to{transform:rotate(360deg)}}
+
+  /* Settings sheet */
+  #sheet{
+    position:fixed;left:0;right:0;bottom:0;z-index:2500;
+    background:var(--asphalt-2);border-top:2px solid #2A3644;
+    border-radius:22px 22px 0 0;
+    padding:20px 22px calc(env(safe-area-inset-bottom) + 24px);
+    transform:translateY(110%);transition:transform .25s ease;
+  }
+  #sheet.open{transform:translateY(0)}
+  #sheet h2{font-weight:900;font-style:italic;text-transform:uppercase;font-size:22px;margin-bottom:16px}
+  .sheetRow{margin-bottom:18px}
+  .sheetRow label{display:flex;justify-content:space-between;margin-bottom:8px}
+  .sheetRow label output{font-family:var(--mono);color:var(--hivis);font-size:12px}
+  input[type=range]{width:100%;accent-color:var(--hivis);height:34px}
+  #leaveBtn{
+    width:100%;padding:14px;border-radius:12px;border:2px solid #4A2430;background:transparent;
+    color:#FF7A8A;font-family:var(--display);font-weight:900;font-style:italic;text-transform:uppercase;font-size:15px;cursor:pointer;
+  }
+  #closeSheet{
+    width:100%;padding:14px;margin-bottom:10px;border-radius:12px;border:none;background:var(--hivis);
+    color:#141900;font-family:var(--display);font-weight:900;font-style:italic;text-transform:uppercase;font-size:15px;cursor:pointer;
+  }
+
+  /* Toast */
+  #toast{
+    position:fixed;top:calc(env(safe-area-inset-top) + 86px);left:50%;transform:translateX(-50%) translateY(-20px);
+    z-index:2800;background:var(--line);color:var(--asphalt);
+    font-weight:900;font-style:italic;text-transform:uppercase;font-size:15px;
+    padding:11px 20px;border-radius:999px;opacity:0;transition:all .25s;pointer-events:none;
+    max-width:88vw;text-align:center;
+  }
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  #toast.orange{background:var(--safety);color:#fff}
+  #toast.cyan{background:var(--immune);color:#04302B}
+
+  /* Win overlay */
+  #winOverlay{
+    position:fixed;inset:0;z-index:3500;background:rgba(19,26,34,.96);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:30px;
+  }
+  #winOverlay .em{font-size:84px;font-style:normal}
+  #winOverlay h2{font-weight:900;font-style:italic;text-transform:uppercase;font-size:44px;line-height:.95;margin:14px 0 6px;color:var(--hivis)}
+  #winOverlay p{font-family:var(--mono);font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--steel);margin-bottom:28px}
+  #againBtn{
+    padding:17px 40px;border:none;border-radius:14px;background:var(--hivis);color:#141900;
+    font-family:var(--display);font-weight:900;font-style:italic;font-size:20px;text-transform:uppercase;cursor:pointer;
+    box-shadow:0 6px 0 #8FA20F;
+  }
+  @media (prefers-reduced-motion: reduce){
+    *{animation:none!important;transition:none!important}
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ JOIN ============ -->
+<div id="join">
+  <div class="util">First to 10 tags wins</div>
+  <h1 class="disp">Street<em>Tag</em></h1>
+  <p class="tagline util">GPS tag. Get close. Hit the button. Run.</p>
+
+  <div class="field">
+    <label class="util" for="nameIn">Your name</label>
+    <input type="text" id="nameIn" maxlength="12" placeholder="RUNNER" autocomplete="off">
+  </div>
+
+  <div class="field">
+    <label class="util">Avatar</label>
+    <div class="avatars" id="avatars"></div>
+  </div>
+
+  <div class="field">
+    <label class="util" for="roomIn">Game code — everyone playing enters the same code</label>
+    <input type="text" id="roomIn" maxlength="10" placeholder="PARK" autocomplete="off">
+  </div>
+
+  <div class="field">
+    <label class="util">Mode</label>
+    <div class="mode-row">
+      <button id="modeGPS" class="sel">Live GPS</button>
+      <button id="modeSim">Practice (no GPS)</button>
+    </div>
+  </div>
+
+  <button id="startBtn">Enter the game</button>
+  <p class="finePrint">Live GPS shares your name, avatar and location with everyone using the same game code while you play. Play outdoors — phone GPS is only accurate to ~15–30 ft, so a tag radius of 30 ft+ works best. Practice mode uses no GPS: tap the map to run, and three bots will hunt you.</p>
+</div>
+
+<!-- ============ GAME ============ -->
+<div id="game" class="hidden">
+  <div id="map"></div>
+
+  <div id="hud">
+    <div id="hudTop">
+      <span class="util" id="roomLabel">GAME —</span>
+      <button id="settingsBtn">⚙ Radius</button>
+    </div>
+    <div id="scores"></div>
+  </div>
+
+  <button id="recenterBtn" title="Recenter">◎</button>
+
+  <div id="bottom">
+    <div id="nearest">Locating…</div>
+    <button id="tagBtn" disabled>TAG</button>
+  </div>
+</div>
+
+<!-- ============ SETTINGS SHEET ============ -->
+<div id="sheet">
+  <h2>Settings</h2>
+  <div class="sheetRow">
+    <label class="util">Tag radius <output id="radOut">10 ft</output></label>
+    <input type="range" id="radIn" min="5" max="100" step="5" value="10">
+  </div>
+  <button id="closeSheet">Done</button>
+  <button id="leaveBtn">Leave game</button>
+</div>
+
+<div id="toast"></div>
+
+<!-- ============ WIN ============ -->
+<div id="winOverlay" class="hidden">
+  <div class="em" id="winEmoji">🏆</div>
+  <h2 id="winName">—</h2>
+  <p id="winSub">First to 10 tags</p>
+  <button id="againBtn">Run it back</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(() => {
+"use strict";
+
+/* ================= CONFIG ================= */
+const WIN_TAGS = 10;
+const IMMUNE_MS = 15000;       // safety window after being tagged
+const STALE_MS = 45000;        // player considered gone
+const POLL_MS = 2500;
+const EMOJIS = ["🏃","🦊","🐸","👻","🤖","🦖","🐝","🥷","🐙","🦄","😼","🛸"];
+const FT_PER_M = 3.28084;
+
+/* ================= STATE ================= */
+const S = {
+  id: null, name: "", emoji: EMOJIS[0], room: "PARK",
+  mode: "gps",                  // gps | sim
+  lat: null, lng: null,
+  tags: 0, taggedAt: 0,
+  radiusFt: 10,
+  others: {},                   // id -> record
+  bots: {},                     // sim mode only
+  lastHitTs: 0,
+  running: false,
+  simTarget: null,
+  map: null, markers: {}, ring: null,
+  followMe: true,
+  gameOver: false
+};
+const keyMe   = () => `tg:${S.room}:p:${S.id}`;
+const keyHit  = id => `tg:${S.room}:hit:${id}`;
+const prefixP = () => `tg:${S.room}:p:`;
+
+/* ================= UTILS ================= */
+const $ = sel => document.querySelector(sel);
+function distM(a, b, c, d){
+  const R = 6371000, r = Math.PI/180;
+  const dLat=(c-a)*r, dLng=(d-b)*r;
+  const h = Math.sin(dLat/2)**2 + Math.cos(a*r)*Math.cos(c*r)*Math.sin(dLng/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h));
+}
+const distFt = (a,b,c,d) => distM(a,b,c,d)*FT_PER_M;
+function toast(msg, cls){
+  const t = $("#toast");
+  t.textContent = msg; t.className = "show" + (cls ? " "+cls : "");
+  clearTimeout(t._h); t._h = setTimeout(()=> t.className="", 2200);
+}
+const now = () => Date.now();
+const isImmune = rec => rec.taggedAt && (now() - rec.taggedAt) < IMMUNE_MS;
+function vibrate(p){ if (navigator.vibrate) try{ navigator.vibrate(p); }catch(e){} }
+
+/* ================= STORAGE (graceful if unavailable) ================= */
+const store = {
+  ok: typeof window.storage !== "undefined",
+  async set(k,v,sh){ if(!this.ok) return; try{ await window.storage.set(k, JSON.stringify(v), sh); }catch(e){} },
+  async get(k,sh){ if(!this.ok) return null; try{ const r = await window.storage.get(k, sh); return r ? JSON.parse(r.value) : null; }catch(e){ return null; } },
+  async del(k,sh){ if(!this.ok) return; try{ await window.storage.delete(k, sh); }catch(e){} },
+  async list(p,sh){ if(!this.ok) return []; try{ const r = await window.storage.list(p, sh); return r ? r.keys : []; }catch(e){ return []; } }
+};
+
+/* ================= JOIN SCREEN ================= */
+const avWrap = $("#avatars");
+EMOJIS.forEach((e,i) => {
+  const b = document.createElement("button");
+  b.textContent = e; if (i===0) b.classList.add("sel");
+  b.onclick = () => { avWrap.querySelectorAll("button").forEach(x=>x.classList.remove("sel")); b.classList.add("sel"); S.emoji = e; };
+  avWrap.appendChild(b);
+});
+$("#modeGPS").onclick = () => { S.mode="gps"; $("#modeGPS").classList.add("sel"); $("#modeSim").classList.remove("sel"); };
+$("#modeSim").onclick = () => { S.mode="sim"; $("#modeSim").classList.add("sel"); $("#modeGPS").classList.remove("sel"); };
+
+$("#startBtn").onclick = async () => {
+  S.name = ($("#nameIn").value.trim() || "RUNNER").toUpperCase();
+  S.room = ($("#roomIn").value.trim() || "PARK").toUpperCase().replace(/[^A-Z0-9]/g,"") || "PARK";
+  S.id = "u" + Math.random().toString(36).slice(2,10);
+  S.tags = 0; S.taggedAt = 0; S.gameOver = false;
+  $("#roomLabel").textContent = "GAME " + S.room;
+  $("#join").classList.add("hidden");
+  $("#game").classList.remove("hidden");
+  initMap();
+  if (S.mode === "gps") startGPS(); else startSim();
+  S.running = true;
+  loop();
+};
+
+/* ================= MAP ================= */
+function initMap(){
+  if (S.map) { S.map.remove(); S.markers = {}; S.ring = null; }
+  S.map = L.map("map", { zoomControl:false, attributionControl:true }).setView([41.2565,-95.9345], 17);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19, attribution: "© OpenStreetMap"
+  }).addTo(S.map);
+  S.map.on("dragstart", ()=> S.followMe = false);
+  $("#recenterBtn").onclick = () => { S.followMe = true; if (S.lat!=null) S.map.setView([S.lat,S.lng], Math.max(S.map.getZoom(),18)); };
+  if (S.mode === "sim"){
+    S.map.on("click", ev => { S.simTarget = [ev.latlng.lat, ev.latlng.lng]; toast("Running…"); });
+  }
+}
+function markerFor(id, rec, isMe){
+  const cls = "pMark" + (isMe?" me":"") + (isImmune(rec)?" immune":"");
+  const html = `<div class="${cls}"><div class="bubble">${rec.emoji}</div><div class="tag">${isMe?"YOU":rec.name}</div></div>`;
+  const icon = L.divIcon({ html, className:"", iconSize:[46,64], iconAnchor:[23,32] });
+  if (!S.markers[id]) S.markers[id] = L.marker([rec.lat, rec.lng], { icon }).addTo(S.map);
+  else { S.markers[id].setLatLng([rec.lat, rec.lng]); S.markers[id].setIcon(icon); }
+}
+function updateRing(){
+  if (S.lat == null) return;
+  const px = radiusPx();
+  const icon = L.divIcon({ html:`<div class="ringIcon" style="width:${px*2}px;height:${px*2}px"></div>`, className:"", iconSize:[px*2,px*2], iconAnchor:[px,px] });
+  if (!S.ring) S.ring = L.marker([S.lat,S.lng], { icon, interactive:false, zIndexOffset:-1000 }).addTo(S.map);
+  else { S.ring.setLatLng([S.lat,S.lng]); S.ring.setIcon(icon); }
+}
+function radiusPx(){
+  // meters-per-pixel at current lat/zoom
+  const mpp = 40075016.686 * Math.abs(Math.cos(S.lat*Math.PI/180)) / Math.pow(2, S.map.getZoom()+8);
+  return Math.max(14, (S.radiusFt/FT_PER_M)/mpp);
+}
+
+/* ================= GPS ================= */
+function startGPS(){
+  if (!("geolocation" in navigator)){ toast("No GPS here — switching to practice", "orange"); S.mode="sim"; startSim(); return; }
+  navigator.geolocation.watchPosition(
+    pos => {
+      const first = S.lat == null;
+      S.lat = pos.coords.latitude; S.lng = pos.coords.longitude;
+      if (first){ S.map.setView([S.lat,S.lng], 18); toast("You're live. Go get 'em."); }
+      render();
+    },
+    err => {
+      if (S.lat == null){
+        toast("GPS blocked — practice mode instead", "orange");
+        S.mode = "sim"; initMap(); startSim();
+      }
+    },
+    { enableHighAccuracy:true, maximumAge:2000, timeout:15000 }
+  );
+}
+
+/* ================= PRACTICE MODE (bots, tap-to-run) ================= */
+function startSim(){
+  S.lat = 41.2565; S.lng = -95.9345;
+  S.map.setView([S.lat,S.lng], 18);
+  const names=[["BLITZ","🦖"],["ZIPPY","🐝"],["GHOST","👻"]];
+  names.forEach(([n,e],i) => {
+    S.bots["b"+i] = { id:"b"+i, name:n, emoji:e,
+      lat:S.lat + (Math.random()-0.5)*0.0012, lng:S.lng + (Math.random()-0.5)*0.0012,
+      tags:0, taggedAt:0, ts:now(), _wander:now() };
+  });
+  toast("Practice: tap the map to run");
+  setInterval(simTick, 400);
+}
+function simTick(){
+  if (!S.running || S.gameOver) return;
+  const stepMe = 0.000024; // ~ fast jog per tick
+  if (S.simTarget){
+    const [tl,tg]=S.simTarget, dLat=tl-S.lat, dLng=tg-S.lng;
+    const d=Math.hypot(dLat,dLng);
+    if (d < stepMe) { S.lat=tl; S.lng=tg; S.simTarget=null; }
+    else { S.lat += dLat/d*stepMe; S.lng += dLng/d*stepMe; }
+  }
+  for (const b of Object.values(S.bots)){
+    b.ts = now();
+    const dFt = distFt(b.lat,b.lng,S.lat,S.lng);
+    const meImmune = S.taggedAt && (now()-S.taggedAt) < IMMUNE_MS;
+    const chase = !meImmune && dFt < 220;
+    let dLat, dLng;
+    if (chase){ dLat = S.lat-b.lat; dLng = S.lng-b.lng; }
+    else {
+      if (now()-b._wander > 3500){ b._wd=[(Math.random()-0.5),(Math.random()-0.5)]; b._wander=now(); }
+      [dLat,dLng] = b._wd || [0.1,0.1];
+    }
+    const d=Math.hypot(dLat,dLng)||1, sp=stepMe*(chase?0.82:0.4);
+    b.lat += dLat/d*sp; b.lng += dLng/d*sp;
+    // bot tags me
+    if (chase && distFt(b.lat,b.lng,S.lat,S.lng) <= S.radiusFt && !meImmune){
+      b.tags++; S.taggedAt = now();
+      vibrate([80,60,80]);
+      toast(`${b.emoji} ${b.name} TAGGED YOU — 15s safety`, "orange");
+      if (b.tags >= WIN_TAGS) endGame(b);
+    }
+  }
+  render();
+}
+
+/* ================= NETWORK LOOP (GPS mode) ================= */
+async function loop(){
+  while (S.running){
+    try {
+      if (S.mode === "gps" && S.lat != null && store.ok){
+        await store.set(keyMe(), { id:S.id, name:S.name, emoji:S.emoji, lat:S.lat, lng:S.lng, tags:S.tags, taggedAt:S.taggedAt, ts:now() }, true);
+        // was I tagged?
+        const hit = await store.get(keyHit(S.id), true);
+        if (hit && hit.ts > S.lastHitTs && hit.ts > (S.taggedAt||0)){
+          S.lastHitTs = hit.ts; S.taggedAt = hit.ts;
+          vibrate([80,60,80]);
+          toast(`${hit.byName} TAGGED YOU — 15s safety`, "orange");
+        }
+        // fetch others
+        const keys = await store.list(prefixP(), true);
+        const fresh = {};
+        for (const k of keys){
+          if (k === keyMe()) continue;
+          const rec = await store.get(k, true);
+          if (rec && now() - rec.ts < STALE_MS){
+            fresh[rec.id] = rec;
+            if (rec.tags >= WIN_TAGS && !S.gameOver) endGame(rec);
+          } else if (rec) {
+            store.del(k, true);
+          }
+        }
+        S.others = fresh;
+        if (S.tags >= WIN_TAGS && !S.gameOver) endGame(null);
+      }
+    } catch(e){ /* keep playing */ }
+    render();
+    await new Promise(r => setTimeout(r, POLL_MS));
+  }
+}
+
+/* ================= TAGGING ================= */
+function opponents(){
+  return S.mode === "sim" ? Object.values(S.bots) : Object.values(S.others);
+}
+function nearestOpponent(){
+  let best=null, bestD=Infinity;
+  for (const o of opponents()){
+    const d = distFt(S.lat,S.lng,o.lat,o.lng);
+    if (d < bestD){ bestD = d; best = o; }
+  }
+  return best ? { o:best, ft:bestD } : null;
+}
+$("#tagBtn").onclick = async () => {
+  const n = nearestOpponent();
+  if (!n || n.ft > S.radiusFt || S.lat==null || S.gameOver) return;
+  if (isImmune(n.o)){ toast(`${n.o.name} has safety — wait it out`, "cyan"); return; }
+  S.tags++;
+  n.o.taggedAt = now(); // optimistic
+  vibrate(60);
+  toast(`TAG! ${n.o.emoji} ${n.o.name} — that's ${S.tags}`, "");
+  if (S.mode === "gps"){
+    await store.set(keyHit(n.o.id), { by:S.id, byName:S.name, ts:now() }, true);
+    await store.set(keyMe(), { id:S.id, name:S.name, emoji:S.emoji, lat:S.lat, lng:S.lng, tags:S.tags, taggedAt:S.taggedAt, ts:now() }, true);
+  }
+  if (S.tags >= WIN_TAGS) endGame(null);
+  render();
+};
+
+/* ================= RENDER ================= */
+function render(){
+  if (S.lat == null || !S.map) return;
+  const meRec = { emoji:S.emoji, name:S.name, lat:S.lat, lng:S.lng, taggedAt:S.taggedAt };
+  markerFor("me", meRec, true);
+  updateRing();
+  if (S.followMe) S.map.panTo([S.lat,S.lng], { animate:true, duration:0.4 });
+
+  const opps = opponents();
+  const live = new Set(["me"]);
+  for (const o of opps){ markerFor(o.id, o, false); live.add(o.id); }
+  for (const id of Object.keys(S.markers)){
+    if (!live.has(id)){ S.map.removeLayer(S.markers[id]); delete S.markers[id]; }
+  }
+
+  // scoreboard
+  const all = [{ id:"me", name:S.name, emoji:S.emoji, tags:S.tags, taggedAt:S.taggedAt }, ...opps]
+    .sort((a,b)=>b.tags-a.tags);
+  $("#scores").innerHTML = all.map(p =>
+    `<div class="scoreChip ${p.id==="me"?"me":""} ${isImmune(p)?"immune":""}">
+      <span class="em">${p.emoji}</span><span class="nm">${p.id==="me"?"YOU":p.name}</span>
+      <span class="sc">${p.tags}<small>/${WIN_TAGS}</small></span>
+    </div>`).join("");
+
+  // nearest + arm button
+  const n = nearestOpponent();
+  const btn = $("#tagBtn"), near = $("#nearest");
+  if (!n){
+    near.className=""; near.innerHTML = S.mode==="gps" ? `Waiting for players on code <b>${S.room}</b>…` : "No one nearby";
+    btn.classList.remove("armed"); btn.disabled = true; btn.textContent = "TAG";
+  } else {
+    const inRange = n.ft <= S.radiusFt, canTag = inRange && !isImmune(n.o);
+    near.className = inRange ? "hot" : "";
+    near.innerHTML = `${n.o.emoji} <b>${n.o.name}</b> — <b>${Math.round(n.ft)} ft</b>${isImmune(n.o)?" · SAFETY":""}`;
+    btn.disabled = !canTag;
+    btn.classList.toggle("armed", canTag);
+    btn.textContent = canTag ? `TAG ${n.o.name}` : (inRange ? "SAFETY ON" : "TAG");
+  }
+}
+
+/* ================= SETTINGS / WIN / LEAVE ================= */
+$("#settingsBtn").onclick = () => $("#sheet").classList.add("open");
+$("#closeSheet").onclick  = () => $("#sheet").classList.remove("open");
+$("#radIn").oninput = e => { S.radiusFt = +e.target.value; $("#radOut").textContent = S.radiusFt + " ft"; render(); };
+$("#leaveBtn").onclick = () => { cleanup(); location.reload(); };
+
+function endGame(winner){
+  S.gameOver = true;
+  const w = winner || { name:"YOU", emoji:S.emoji };
+  $("#winEmoji").textContent = winner ? "💀" : "🏆";
+  $("#winName").textContent = (winner ? w.name + " WINS" : "YOU WIN");
+  $("#winSub").textContent = `First to ${WIN_TAGS} tags · Game ${S.room}`;
+  $("#winOverlay").classList.remove("hidden");
+  vibrate(winner ? [200] : [80,60,80,60,200]);
+}
+$("#againBtn").onclick = async () => {
+  S.tags = 0; S.taggedAt = 0; S.gameOver = false;
+  for (const b of Object.values(S.bots)){ b.tags=0; b.taggedAt=0; }
+  if (S.mode === "gps") await store.set(keyMe(), { id:S.id, name:S.name, emoji:S.emoji, lat:S.lat, lng:S.lng, tags:0, taggedAt:0, ts:now() }, true);
+  $("#winOverlay").classList.add("hidden");
+  toast("New round. First to " + WIN_TAGS + ".");
+};
+function cleanup(){
+  S.running = false;
+  if (S.mode === "gps" && S.id){ store.del(keyMe(), true); store.del(keyHit(S.id), true); }
+}
+window.addEventListener("pagehide", cleanup);
+})();
+</script>
+</body>
+</html>
