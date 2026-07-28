@@ -141,6 +141,12 @@
     border-radius:10px;padding:7px 12px;font-family:var(--mono);font-size:11px;
     text-transform:uppercase;letter-spacing:.08em;cursor:pointer;
   }
+  #clock{
+    pointer-events:auto;font-family:var(--mono);font-size:15px;font-weight:700;
+    letter-spacing:.1em;color:var(--hivis);
+    background:rgba(27,36,48,.92);border:2px solid #2A3644;border-radius:10px;padding:5px 10px;
+  }
+  #clock.endgame{color:var(--safety);border-color:var(--safety);animation:blink .6s infinite alternate}
   #scores{display:flex;gap:8px;overflow-x:auto;pointer-events:auto;scrollbar-width:none;padding-bottom:2px}
   #scores::-webkit-scrollbar{display:none}
   .scoreChip{
@@ -282,6 +288,16 @@
   </div>
 
   <div class="field">
+    <label class="util">Match timer — time's up, most tags wins</label>
+    <div class="mode-row" id="timerRow">
+      <button data-min="0" class="sel">None</button>
+      <button data-min="5">5 min</button>
+      <button data-min="10">10 min</button>
+      <button data-min="15">15 min</button>
+    </div>
+  </div>
+
+  <div class="field">
     <label class="util">Mode</label>
     <div class="mode-row">
       <button id="modeGPS" class="sel">Live GPS</button>
@@ -300,6 +316,7 @@
   <div id="hud">
     <div id="hudTop">
       <span class="util" id="roomLabel">GAME —</span>
+      <span id="clock" class="hidden">--:--</span>
       <button id="settingsBtn">⚙ Radius</button>
     </div>
     <div id="scores"></div>
@@ -354,6 +371,7 @@ const S = {
   lat: null, lng: null,
   tags: 0, taggedAt: 0,
   radiusFt: 10,
+  timerMin: 0, endsAt: 0,
   others: {},                   // id -> record
   bots: {},                     // sim mode only
   lastHitTs: 0,
@@ -365,6 +383,7 @@ const S = {
 };
 const keyMe   = () => `tg:${S.room}:p:${S.id}`;
 const keyHit  = id => `tg:${S.room}:hit:${id}`;
+const keyCfg  = () => `tg:${S.room}:cfg`;
 const prefixP = () => `tg:${S.room}:p:`;
 
 /* ================= UTILS ================= */
@@ -404,6 +423,13 @@ EMOJIS.forEach((e,i) => {
 });
 $("#modeGPS").onclick = () => { S.mode="gps"; $("#modeGPS").classList.add("sel"); $("#modeSim").classList.remove("sel"); };
 $("#modeSim").onclick = () => { S.mode="sim"; $("#modeSim").classList.add("sel"); $("#modeGPS").classList.remove("sel"); };
+document.querySelectorAll("#timerRow button").forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll("#timerRow button").forEach(x => x.classList.remove("sel"));
+    b.classList.add("sel");
+    S.timerMin = +b.dataset.min;
+  };
+});
 
 $("#startBtn").onclick = async () => {
   S.name = ($("#nameIn").value.trim() || "RUNNER").toUpperCase();
@@ -417,8 +443,51 @@ $("#startBtn").onclick = async () => {
   if (S.mode === "gps") startGPS(); else startSim();
   S.running = true;
   keepAwake();
+  startTimer();
   loop();
 };
+
+/* ================= MATCH TIMER ================= */
+async function startTimer(){
+  if (S.mode === "gps" && store.ok){
+    // First player into the room sets the clock; everyone else adopts it
+    const cfg = await store.get(keyCfg(), true);
+    const fresh = cfg && (now() - cfg.ts) < 2*60*60*1000 && (cfg.endsAt === 0 || cfg.endsAt > now());
+    if (fresh){
+      S.endsAt = cfg.endsAt;
+      if (cfg.endsAt) toast("Joined timed match — " + fmtClock(cfg.endsAt - now()) + " left");
+    } else {
+      S.endsAt = S.timerMin ? now() + S.timerMin*60000 : 0;
+      await store.set(keyCfg(), { endsAt: S.endsAt, min: S.timerMin, ts: now() }, true);
+    }
+  } else {
+    S.endsAt = S.timerMin ? now() + S.timerMin*60000 : 0;
+  }
+  $("#clock").classList.toggle("hidden", !S.endsAt);
+  clearInterval(S._clockIv);
+  if (S.endsAt) S._clockIv = setInterval(clockTick, 500);
+}
+function fmtClock(ms){
+  const s = Math.max(0, Math.ceil(ms/1000));
+  return String(Math.floor(s/60)).padStart(2,"0") + ":" + String(s%60).padStart(2,"0");
+}
+function clockTick(){
+  if (!S.endsAt || S.gameOver) return;
+  const left = S.endsAt - now();
+  const el = $("#clock");
+  el.textContent = fmtClock(left);
+  el.classList.toggle("endgame", left < 60000);
+  if (left <= 0){ clearInterval(S._clockIv); timeUp(); }
+}
+function timeUp(){
+  const all = [{ id:"me", name:"YOU", emoji:S.emoji, tags:S.tags }, ...opponents()]
+    .sort((a,b) => b.tags - a.tags);
+  const top = all[0], tied = all.length > 1 && all[1].tags === top.tags;
+  vibrate([120,80,120]);
+  if (tied) endGame({ name:"DRAW", emoji:"🤝" }, "Time! Tied at " + top.tags + " tags", "🤝", "TIME —");
+  else if (top.id === "me") endGame(null, "Time! You lead with " + top.tags + " tags");
+  else endGame(top, "Time! " + top.tags + " tags takes it");
+}
 
 /* Screen wake lock — a tag game is useless if the phone sleeps mid-chase */
 async function keepAwake(){
@@ -640,27 +709,39 @@ $("#closeSheet").onclick  = () => $("#sheet").classList.remove("open");
 $("#radIn").oninput = e => { S.radiusFt = +e.target.value; $("#radOut").textContent = S.radiusFt + " ft"; render(); };
 $("#leaveBtn").onclick = () => { cleanup(); location.reload(); };
 
-function endGame(winner){
+function endGame(winner, reason, emoji, titlePrefix){
   S.gameOver = true;
+  clearInterval(S._clockIv);
   const w = winner || { name:"YOU", emoji:S.emoji };
-  $("#winEmoji").textContent = winner ? "💀" : "🏆";
-  $("#winName").textContent = (winner ? w.name + " WINS" : "YOU WIN");
-  $("#winSub").textContent = `First to ${WIN_TAGS} tags · Game ${S.room}`;
+  $("#winEmoji").textContent = emoji || (winner ? "💀" : "🏆");
+  $("#winName").textContent = titlePrefix ? (titlePrefix + " " + w.name) : (winner ? w.name + " WINS" : "YOU WIN");
+  $("#winSub").textContent = (reason || `First to ${WIN_TAGS} tags`) + ` · Game ${S.room}`;
   $("#winOverlay").classList.remove("hidden");
   vibrate(winner ? [200] : [80,60,80,60,200]);
 }
 $("#againBtn").onclick = async () => {
   S.tags = 0; S.taggedAt = 0; S.gameOver = false;
   for (const b of Object.values(S.bots)){ b.tags=0; b.taggedAt=0; }
-  if (S.mode === "gps") await store.set(keyMe(), { id:S.id, name:S.name, emoji:S.emoji, lat:S.lat, lng:S.lng, tags:0, taggedAt:0, ts:now() }, true);
+  if (S.mode === "gps"){
+    await store.set(keyMe(), { id:S.id, name:S.name, emoji:S.emoji, lat:S.lat, lng:S.lng, tags:0, taggedAt:0, ts:now() }, true);
+    if (S.timerMin) await store.set(keyCfg(), { endsAt: now() + S.timerMin*60000, min: S.timerMin, ts: now() }, true);
+  }
+  await startTimer();
   $("#winOverlay").classList.add("hidden");
-  toast("New round. First to " + WIN_TAGS + ".");
+  toast("New round. First to " + WIN_TAGS + (S.endsAt ? " — " + fmtClock(S.endsAt - now()) + " on the clock" : "."));
 };
 function cleanup(){
   S.running = false;
   if (S.mode === "gps" && S.id){ store.del(keyMe(), true); store.del(keyHit(S.id), true); }
 }
 window.addEventListener("pagehide", cleanup);
+
+/* ================= OFFLINE PWA ================= */
+if ("serviceWorker" in navigator){
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  });
+}
 })();
 </script>
 </body>
