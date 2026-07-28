@@ -1,5 +1,5 @@
 /* Street Tag service worker — offline app shell, live map tiles with cache fallback */
-const CACHE = "streettag-v3";
+const CACHE = "streettag-v4";
 const SHELL = [
   "./",
   "./index.html",
@@ -55,7 +55,7 @@ self.addEventListener("fetch", e => {
   }
   e.respondWith(
     caches.match(e.request).then(hit => hit || fetch(e.request).then(res => {
-      if (res.ok && (url.origin === location.origin || url.hostname === "cdnjs.cloudflare.com")){
+      if (res.ok && (url.origin === location.origin || ["cdnjs.cloudflare.com","cdn.jsdelivr.net","unpkg.com"].includes(url.hostname))){
         const copy = res.clone();
         caches.open(CACHE).then(c => c.put(e.request, copy));
       }

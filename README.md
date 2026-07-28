@@ -14,4 +14,4 @@ No GPS? Practice mode gives you three bots and tap-to-run movement.
 
 ## Notes
 - Single static HTML file, Leaflet + OpenStreetMap tiles
-- Multiplayer sync uses `window.storage` (Claude artifact API) — for standalone hosting, swap the `store` object for your own backend (a small WebSocket relay or Firebase both work)
+- Realtime multiplayer over MQTT/WebSockets via public brokers (EMQX, HiveMQ fallback) — no backend or keys required. Positions publish ~1/s, tags are instant. Inside the Claude artifact preview it falls back to `window.storage` polling. For private matches, point `BROKERS` at your own broker (e.g. Mosquitto with websockets in an LXC)

@@ -306,7 +306,7 @@
   </div>
 
   <button id="startBtn">Enter the game</button>
-  <p class="finePrint">Live GPS shares your name, avatar and location with everyone using the same game code while you play. Play outdoors — phone GPS is only accurate to ~15–30 ft, so a tag radius of 30 ft+ works best. Practice mode uses no GPS: tap the map to run, and three bots will hunt you.</p>
+  <p class="finePrint">Live GPS shares your name, avatar and location with everyone using the same game code while you play, over a public game relay — pick an uncommon code (e.g. WACIT-PARK-42) so strangers can't stumble into your match. Play outdoors — phone GPS is only accurate to ~15–30 ft, so a tag radius of 30 ft+ works best. Practice mode uses no GPS: tap the map to run, and three bots will hunt you.</p>
 </div>
 
 <!-- ============ GAME ============ -->
@@ -443,29 +443,45 @@ $("#startBtn").onclick = async () => {
   if (S.mode === "gps") startGPS(); else startSim();
   S.running = true;
   keepAwake();
-  startTimer();
+  initNet().then(startTimer);
   loop();
 };
 
 /* ================= MATCH TIMER ================= */
-async function startTimer(){
-  if (S.mode === "gps" && store.ok){
-    // First player into the room sets the clock; everyone else adopts it
-    const cfg = await store.get(keyCfg(), true);
-    const fresh = cfg && (now() - cfg.ts) < 2*60*60*1000 && (cfg.endsAt === 0 || cfg.endsAt > now());
-    if (fresh){
-      S.endsAt = cfg.endsAt;
-      if (cfg.endsAt) toast("Joined timed match — " + fmtClock(cfg.endsAt - now()) + " left");
-    } else {
-      S.endsAt = S.timerMin ? now() + S.timerMin*60000 : 0;
-      await store.set(keyCfg(), { endsAt: S.endsAt, min: S.timerMin, ts: now() }, true);
-    }
-  } else {
-    S.endsAt = S.timerMin ? now() + S.timerMin*60000 : 0;
-  }
+function applyTimer(endsAt){
+  S.endsAt = endsAt || 0;
   $("#clock").classList.toggle("hidden", !S.endsAt);
   clearInterval(S._clockIv);
   if (S.endsAt) S._clockIv = setInterval(clockTick, 500);
+}
+async function startTimer(){
+  if (S.mode === "sim" || NET.mode === "none"){
+    applyTimer(S.timerMin ? now() + S.timerMin*60000 : 0);
+    return;
+  }
+  if (NET.mode === "mqtt"){
+    // Retained cfg on the broker arrives right after subscribe; if none shows
+    // up in 2.5s, we're first in — set the clock for the room.
+    setTimeout(() => {
+      if (!S._cfgGot && S.running && !S.gameOver){
+        const e = S.timerMin ? now() + S.timerMin*60000 : 0;
+        applyTimer(e);
+        pub(T("cfg"), { endsAt: e, min: S.timerMin, ts: now() }, true);
+      }
+    }, 2500);
+    return;
+  }
+  // storage fallback
+  const cfg = await store.get(keyCfg(), true);
+  const fresh = cfg && (now() - cfg.ts) < 2*60*60*1000 && (cfg.endsAt === 0 || cfg.endsAt > now());
+  if (fresh){
+    applyTimer(cfg.endsAt);
+    if (cfg.endsAt) toast("Joined timed match — " + fmtClock(cfg.endsAt - now()) + " left");
+  } else {
+    const e = S.timerMin ? now() + S.timerMin*60000 : 0;
+    applyTimer(e);
+    await store.set(keyCfg(), { endsAt: e, min: S.timerMin, ts: now() }, true);
+  }
 }
 function fmtClock(ms){
   const s = Math.max(0, Math.ceil(ms/1000));
@@ -542,6 +558,7 @@ function startGPS(){
       const first = S.lat == null;
       S.lat = pos.coords.latitude; S.lng = pos.coords.longitude;
       if (first){ S.map.setView([S.lat,S.lng], 18); toast("You're live. Go get 'em."); }
+      if (NET.mode === "mqtt" && now() - (S._lastPub||0) > 1000){ S._lastPub = now(); publishState(); }
       render();
     },
     err => {
@@ -600,38 +617,128 @@ function simTick(){
   render();
 }
 
-/* ================= NETWORK LOOP (GPS mode) ================= */
+/* ================= NETWORK ================= */
+/* Realtime sync over MQTT/WebSockets (public broker — fine for casual games).
+   Falls back to window.storage polling inside the Claude artifact preview. */
+const NET = { mode:"none", client:null };
+const BROKERS = ["wss://broker.emqx.io:8084/mqtt", "wss://broker.hivemq.com:8884/mqtt"];
+const MQTT_SRC = ["https://cdn.jsdelivr.net/npm/mqtt@5/dist/mqtt.min.js", "https://unpkg.com/mqtt@5/dist/mqtt.min.js"];
+const T = sub => `streettag/v1/${S.room}/${sub}`;
+
+function loadScript(srcs){
+  return new Promise((res, rej) => {
+    const tryOne = i => {
+      if (i >= srcs.length) return rej(new Error("no cdn"));
+      const s = document.createElement("script");
+      s.src = srcs[i]; s.onload = res; s.onerror = () => tryOne(i+1);
+      document.head.appendChild(s);
+    };
+    tryOne(0);
+  });
+}
+function mqttConnect(){
+  return new Promise((resolve, reject) => {
+    let bi = 0;
+    const tryBroker = () => {
+      if (bi >= BROKERS.length) return reject(new Error("no broker"));
+      let settled = false;
+      const c = mqtt.connect(BROKERS[bi++], { clientId:"st_"+S.id, clean:true, connectTimeout:6000, reconnectPeriod:3000 });
+      const fail = () => { if (settled) return; settled = true; try{ c.end(true); }catch(e){} tryBroker(); };
+      const t = setTimeout(fail, 8000);
+      c.on("connect", () => { if (settled) return; settled = true; clearTimeout(t); NET.client = c; setupSubs(c); resolve(); });
+      c.on("error", () => { if (!NET.client) fail(); });
+    };
+    tryBroker();
+  });
+}
+function setupSubs(c){
+  c.subscribe([T("state/#"), T("hit/"+S.id), T("cfg")]);
+  c.on("message", (topic, payload) => {
+    let m; try{ m = JSON.parse(payload.toString()); }catch(e){ return; }
+    if (topic === T("cfg")) onCfg(m);
+    else if (topic === T("hit/"+S.id)) onHit(m);
+    else if (topic.startsWith(T("state/")) && m.id && m.id !== S.id){
+      m.ts = now(); // trust arrival time, not remote clocks
+      S.others[m.id] = m;
+      if (m.tags >= WIN_TAGS && !S.gameOver && now() > (S._winHoldUntil||0)) endGame(m);
+      render();
+    }
+  });
+}
+function pub(topic, obj, retain){
+  if (NET.client) try{ NET.client.publish(topic, JSON.stringify(obj), { retain: !!retain }); }catch(e){}
+}
+function myState(){
+  return { id:S.id, name:S.name, emoji:S.emoji, lat:S.lat, lng:S.lng, tags:S.tags, taggedAt:S.taggedAt };
+}
+function publishState(){ if (S.lat != null) pub(T("state/"+S.id), myState()); }
+function onHit(m){
+  if (!m || m.by === S.id || m.ts <= S.lastHitTs) return;
+  S.lastHitTs = m.ts; S.taggedAt = now();
+  vibrate([80,60,80]);
+  toast(`${m.byName} TAGGED YOU — 15s safety`, "orange");
+  publishState();
+}
+function onCfg(m){
+  const fresh = m && (now() - m.ts) < 2*60*60*1000 && (m.endsAt === 0 || m.endsAt > now());
+  if (!fresh) return;
+  S._cfgGot = true;
+  if (m.endsAt !== S.endsAt){
+    applyTimer(m.endsAt);
+    if (m.endsAt) toast("Match clock: " + fmtClock(m.endsAt - now()) + " left");
+  }
+}
+function pruneOthers(maxAge){
+  for (const id of Object.keys(S.others)){
+    if (now() - S.others[id].ts > maxAge) delete S.others[id];
+  }
+}
+async function initNet(){
+  if (S.mode !== "gps") return;
+  try {
+    await loadScript(MQTT_SRC);
+    await mqttConnect();
+    NET.mode = "mqtt";
+    toast("Live sync on — share code " + S.room);
+    publishState();
+  } catch(e){
+    NET.mode = store.ok ? "storage" : "none";
+    if (NET.mode === "none") toast("No sync available — solo GPS only", "orange");
+  }
+}
+
 async function loop(){
   while (S.running){
     try {
-      if (S.mode === "gps" && S.lat != null && store.ok){
-        await store.set(keyMe(), { id:S.id, name:S.name, emoji:S.emoji, lat:S.lat, lng:S.lng, tags:S.tags, taggedAt:S.taggedAt, ts:now() }, true);
-        // was I tagged?
-        const hit = await store.get(keyHit(S.id), true);
-        if (hit && hit.ts > S.lastHitTs && hit.ts > (S.taggedAt||0)){
-          S.lastHitTs = hit.ts; S.taggedAt = hit.ts;
-          vibrate([80,60,80]);
-          toast(`${hit.byName} TAGGED YOU — 15s safety`, "orange");
-        }
-        // fetch others
-        const keys = await store.list(prefixP(), true);
-        const fresh = {};
-        for (const k of keys){
-          if (k === keyMe()) continue;
-          const rec = await store.get(k, true);
-          if (rec && now() - rec.ts < STALE_MS){
-            fresh[rec.id] = rec;
-            if (rec.tags >= WIN_TAGS && !S.gameOver) endGame(rec);
-          } else if (rec) {
-            store.del(k, true);
+      if (S.mode === "gps" && S.lat != null){
+        if (NET.mode === "mqtt"){
+          publishState();
+          pruneOthers(15000);
+        } else if (NET.mode === "storage" && store.ok){
+          await store.set(keyMe(), { ...myState(), ts:now() }, true);
+          const hit = await store.get(keyHit(S.id), true);
+          if (hit && hit.ts > S.lastHitTs && hit.ts > (S.taggedAt||0)){
+            S.lastHitTs = hit.ts; S.taggedAt = hit.ts;
+            vibrate([80,60,80]);
+            toast(`${hit.byName} TAGGED YOU — 15s safety`, "orange");
           }
+          const keys = await store.list(prefixP(), true);
+          const fresh = {};
+          for (const k of keys){
+            if (k === keyMe()) continue;
+            const rec = await store.get(k, true);
+            if (rec && now() - rec.ts < STALE_MS){
+              fresh[rec.id] = rec;
+              if (rec.tags >= WIN_TAGS && !S.gameOver && now() > (S._winHoldUntil||0)) endGame(rec);
+            } else if (rec) store.del(k, true);
+          }
+          S.others = fresh;
         }
-        S.others = fresh;
         if (S.tags >= WIN_TAGS && !S.gameOver) endGame(null);
       }
     } catch(e){ /* keep playing */ }
     render();
-    await new Promise(r => setTimeout(r, POLL_MS));
+    await new Promise(r => setTimeout(r, NET.mode === "mqtt" ? 2000 : POLL_MS));
   }
 }
 
@@ -656,8 +763,13 @@ $("#tagBtn").onclick = async () => {
   vibrate(60);
   toast(`TAG! ${n.o.emoji} ${n.o.name} — that's ${S.tags}`, "");
   if (S.mode === "gps"){
-    await store.set(keyHit(n.o.id), { by:S.id, byName:S.name, ts:now() }, true);
-    await store.set(keyMe(), { id:S.id, name:S.name, emoji:S.emoji, lat:S.lat, lng:S.lng, tags:S.tags, taggedAt:S.taggedAt, ts:now() }, true);
+    if (NET.mode === "mqtt"){
+      pub(T("hit/"+n.o.id), { by:S.id, byName:S.name, ts:now() });
+      publishState();
+    } else if (NET.mode === "storage"){
+      await store.set(keyHit(n.o.id), { by:S.id, byName:S.name, ts:now() }, true);
+      await store.set(keyMe(), { ...myState(), ts:now() }, true);
+    }
   }
   if (S.tags >= WIN_TAGS) endGame(null);
   render();
@@ -721,18 +833,27 @@ function endGame(winner, reason, emoji, titlePrefix){
 }
 $("#againBtn").onclick = async () => {
   S.tags = 0; S.taggedAt = 0; S.gameOver = false;
+  S._winHoldUntil = now() + 20000; // ignore stale high scores while everyone resets
   for (const b of Object.values(S.bots)){ b.tags=0; b.taggedAt=0; }
+  const newEnd = S.timerMin ? now() + S.timerMin*60000 : 0;
   if (S.mode === "gps"){
-    await store.set(keyMe(), { id:S.id, name:S.name, emoji:S.emoji, lat:S.lat, lng:S.lng, tags:0, taggedAt:0, ts:now() }, true);
-    if (S.timerMin) await store.set(keyCfg(), { endsAt: now() + S.timerMin*60000, min: S.timerMin, ts: now() }, true);
-  }
-  await startTimer();
+    if (NET.mode === "mqtt"){
+      publishState();
+      pub(T("cfg"), { endsAt: newEnd, min: S.timerMin, ts: now() }, true);
+      applyTimer(newEnd);
+    } else if (NET.mode === "storage"){
+      await store.set(keyMe(), { ...myState(), ts:now() }, true);
+      if (S.timerMin) await store.set(keyCfg(), { endsAt: newEnd, min: S.timerMin, ts: now() }, true);
+      await startTimer();
+    } else applyTimer(newEnd);
+  } else applyTimer(newEnd);
   $("#winOverlay").classList.add("hidden");
   toast("New round. First to " + WIN_TAGS + (S.endsAt ? " — " + fmtClock(S.endsAt - now()) + " on the clock" : "."));
 };
 function cleanup(){
   S.running = false;
-  if (S.mode === "gps" && S.id){ store.del(keyMe(), true); store.del(keyHit(S.id), true); }
+  if (NET.client){ try{ NET.client.end(true); }catch(e){} }
+  if (S.mode === "gps" && S.id && NET.mode === "storage"){ store.del(keyMe(), true); store.del(keyHit(S.id), true); }
 }
 window.addEventListener("pagehide", cleanup);
 
